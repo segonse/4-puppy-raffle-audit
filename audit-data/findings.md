@@ -196,7 +196,7 @@ Although you could use `selfdestruct` to send ETH to this contract in order for 
 
 There are more attack vectors with that final require, so we recommend removing it regardless.
 
-# Middle
+# Midium
 
 ### [M-1] Looping through players array to check for duplicates in `PuppyRaffle::enterRaffle` is a potential denial of service (DoS) attack, incrementing gas costs for future entrants
 
@@ -294,7 +294,7 @@ Also, true winners would not get paid out and someone else could take their mone
 
 You could also reserve the 0th position for any competition, but a better solution might be to return an `uint256` where the function returns -1 if the player is not active.
 
-# Information
+# Informational
 
 ### [I-1]: Solidity pragma should be specific, not wide
 
@@ -363,7 +363,7 @@ Instead, you could use:
 
 ### [I-6] State changes are missing events
 
-### [I-6] `PuppyRaffle::_isActivePlayer` si never used and should be removed
+### [I-7] `PuppyRaffle::_isActivePlayer` si never used and should be removed
 
 # Gas
 
